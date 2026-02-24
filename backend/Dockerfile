@@ -1,28 +1,30 @@
-# Backend Dockerfile
-FROM python:3.9-slim
+# ── Stage: runtime ────────────────────────────────────────────────────────────
+FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install system dependencies (needed for cairo-lang sometimes, or just essential build tools)
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    libgmp-dev \
+# System deps (none strictly required for our pure-Python stack, but good to have)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements
-COPY backend/requirements.txt .
+# Install Python dependencies first (layer-cached when code changes)
+COPY backend/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy source code
+# Copy application source + scripts
 COPY backend/src ./src
 COPY backend/scripts ./scripts
 
-# Environment variables
-ENV PYTHONPATH=/app
-ENV DATABASE_URL=sqlite:///./latens.db
+# Data directory for SQLite (mounted as a volume in docker-compose)
+RUN mkdir -p /app/data
 
-# Expose port
+ENV PYTHONPATH=/app
+ENV DATABASE_URL=sqlite:////app/data/latens.db
+
 EXPOSE 8000
 
-# Run command
-CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Entrypoint: seed demo data on first run, then start the API server
+COPY backend/docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+ENTRYPOINT ["/docker-entrypoint.sh"]
