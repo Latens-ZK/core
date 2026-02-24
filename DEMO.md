@@ -55,6 +55,44 @@ This guide walks through the demonstration of Latens for the hackathon.
 1. "We just bridged Bitcoin reputation to Starknet."
 2. "Use cases: DAO Gating, lending credit scores, anonymous airdrops."
 
+## Phase 4: Starknet Contract Deployment
+
+Deploy the contracts once, then use them forever.
+
+### One-Time Setup
+
+```bash
+# 1. Fill in your Starknet Sepolia credentials in .env:
+#    STARKNET_PRIVATE_KEY=0x<your-private-key>
+#    STARKNET_ACCOUNT_ADDRESS=0x<your-account-address>
+#
+#    Get a free account + STRK tokens:
+#    → Install Argent X or Braavos wallet
+#    → Switch to Sepolia testnet
+#    → Faucet: https://faucet.starknet.io
+
+# 2. Install deploy script dependencies (one time):
+cd contracts/scripts && npm install
+
+# 3. Deploy both contracts + register demo Merkle root:
+node deploy.mjs
+
+# 4. Verify on-chain proofs (positive + negative cases):
+node verify_demo.mjs
+```
+
+**deploy.mjs** does:
+1. Declares + deploys `StateRootRegistry` (admin = your account)
+2. Declares + deploys `BalanceVerifier` (registry address passed in constructor)
+3. Calls `update_root` with the demo snapshot Merkle root at block 800,000
+4. Writes contract addresses back to `.env` and `frontend/.env.local`
+
+**verify_demo.mjs** does:
+1. **POSITIVE**: sends valid proof for `1P5ZEDWTKTFGxQjZphgWPQUpe554WKDfHQ` → tx succeeds
+2. **NEGATIVE**: sends tampered proof (wrong balance) → tx reverts
+
+Both tests passing = Phase 4 done criterion met.
+
 ## Troubleshooting
 
 - **"Snapshot not found"**: Ensure backend snapshot generator ran. Trigger via `POST /api/snapshot/generate`.

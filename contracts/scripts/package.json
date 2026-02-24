@@ -1,0 +1,15 @@
+{
+  "name": "latens-deploy",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "description": "Deployment scripts for Latens contracts",
+  "scripts": {
+    "deploy": "node deploy.mjs",
+    "verify": "node verify_demo.mjs"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "starknet": "^5.29.0"
+  }
+}
