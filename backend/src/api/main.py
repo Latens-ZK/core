@@ -10,6 +10,9 @@ load_dotenv()
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi.errors import RateLimitExceeded
+from slowapi import _rate_limit_exceeded_handler
+from .limiter import limiter
 from .routes import proof, snapshot, stats
 from ..database import engine
 from ..models.snapshot import Base
@@ -29,6 +32,10 @@ app = FastAPI(
     description="Zero-Knowledge Bitcoin State Verification on Starknet",
     version="1.0.0",
 )
+
+# Rate limiting (API-03: max 10 proof requests/minute per IP)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS — read from env, fallback to localhost for dev
 _raw_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:3001")

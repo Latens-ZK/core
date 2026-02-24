@@ -2,13 +2,14 @@
 Proof generation endpoints.
 """
 import logging
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, validator
 from typing import Optional, List, Any
 
 from ...circuit.proof_generator import ProofGenerator
 from ...crypto.poseidon import PoseidonHash
 from ...crypto.address_utils import AddressUtils
+from ..limiter import limiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -73,7 +74,8 @@ class ProofResponse(BaseModel):
 # ─── Routes ────────────────────────────────────────────────────────────────────
 
 @router.post("/generate", response_model=ProofResponse)
-async def generate_proof(req: ProofRequest):
+@limiter.limit("10/minute")
+async def generate_proof(request: Request, req: ProofRequest):
     """
     Generate ZK proof calldata for a Bitcoin address balance.
 

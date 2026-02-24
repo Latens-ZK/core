@@ -152,6 +152,12 @@ async def get_latest_snapshot():
         db.close()
 
 
+@router.get("/current", response_model=SnapshotResponse)
+async def get_current_snapshot():
+    """Alias for /latest — returns the most recent complete snapshot (PRD §4.4)."""
+    return await get_latest_snapshot()
+
+
 @router.get("/{block_height}", response_model=SnapshotResponse)
 async def get_snapshot(block_height: int):
     """Get snapshot at a specific block height."""

@@ -333,6 +333,13 @@ class TestSnapshotAPI:
         assert data["status"] == "complete"
         assert "merkle_root" in data
 
+    def test_current_alias(self, seeded_client):
+        """/snapshot/current is an alias for /snapshot/latest (PRD §4.4)."""
+        latest = seeded_client.get("/api/snapshot/latest").json()
+        current = seeded_client.get("/api/snapshot/current").json()
+        assert current["block_height"] == latest["block_height"]
+        assert current["merkle_root"] == latest["merkle_root"]
+
     def test_by_height(self, seeded_client):
         r = seeded_client.get("/api/snapshot/800000")
         assert r.status_code == 200
@@ -375,6 +382,8 @@ class TestProofAPI:
         assert "commitment" in data
         assert "threshold" in data
         assert "block_height" in data
+        assert "starknet_calldata" in data
+        assert isinstance(data["starknet_calldata"], list)
         assert data["balance"] == 7_500_000_000
         assert data["block_height"] == 800_000
         assert data["verified_locally"] is True
