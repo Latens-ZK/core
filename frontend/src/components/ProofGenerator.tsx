@@ -5,9 +5,29 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Shield, Loader2, CheckCircle, XCircle, Copy, ExternalLink, Lock, Download, Box, Key, Cpu, Terminal, Info, ChevronRight, Binary } from 'lucide-react';
 import { MerkleVisualizer } from './MerkleVisualizer';
 import { useNotify } from './NotificationSystem';
+import { generateSalt } from '../lib/crypto';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
 const VERIFIER_ADDRESS = process.env.NEXT_PUBLIC_VERIFIER_ADDRESS || "";
+
+// --- Bitcoin address validation ---
+
+const isValidBitcoinAddress = (addr: string): boolean => {
+    const a = addr.trim();
+    // P2PKH mainnet: 1...
+    if (/^[1][a-km-zA-HJ-NP-Z1-9]{24,33}$/.test(a)) return true;
+    // P2SH mainnet: 3...
+    if (/^[3][a-km-zA-HJ-NP-Z1-9]{24,33}$/.test(a)) return true;
+    // Bech32 mainnet: bc1...
+    if (/^bc1[ac-hj-np-z02-9]{6,87}$/i.test(a)) return true;
+    // Testnet P2PKH: m or n
+    if (/^[mn][a-km-zA-HJ-NP-Z1-9]{24,33}$/.test(a)) return true;
+    // Testnet P2SH: 2...
+    if (/^[2][a-km-zA-HJ-NP-Z1-9]{24,33}$/.test(a)) return true;
+    // Testnet Bech32: tb1...
+    if (/^tb1[ac-hj-np-z02-9]{6,87}$/i.test(a)) return true;
+    return false;
+};
 
 // --- Helper Components (Hoisted for stability) ---
 
@@ -53,7 +73,7 @@ const InspectorSection = ({ title, icon, content, mono, code }: { title: string,
 
 // --- Main Component ---
 
-export const ProofGenerator = ({ account }: { account: any }) => {
+export const ProofGenerator = ({ account, onWalletConnect }: { account: any, onWalletConnect?: (acc: any) => void }) => {
     const { notify } = useNotify();
     const [address, setAddress] = useState('');
     const [thresholdBtc, setThresholdBtc] = useState('1');
@@ -74,6 +94,18 @@ export const ProofGenerator = ({ account }: { account: any }) => {
             setError("Identification required: enter a valid Bitcoin address.");
             return;
         }
+        if (!isValidBitcoinAddress(address)) {
+            notify("Invalid Bitcoin address format.", "error");
+            setError("Invalid Bitcoin address format. Expected P2PKH (1...), P2SH (3...), or Bech32 (bc1...).");
+            return;
+        }
+        const thresholdVal = parseFloat(thresholdBtc);
+        if (isNaN(thresholdVal) || thresholdVal < 0) {
+            notify("Invalid threshold. Must be a non-negative number.", "error");
+            setError("Threshold must be a non-negative number (BTC).");
+            return;
+        }
+
         setError('');
         setStatus('generating');
         setProofData(null);
@@ -81,9 +113,9 @@ export const ProofGenerator = ({ account }: { account: any }) => {
         setLogs([]);
         notify("Proof Generation Initialized. Spinning up ZK-State observer...", "info");
 
-        const thresholdSats = Math.floor(parseFloat(thresholdBtc) * 100_000_000);
-        const saltHex = Array.from(crypto.getRandomValues(new Uint8Array(32)))
-            .map(b => b.toString(16).padStart(2, '0')).join('');
+        const thresholdSats = Math.floor(thresholdVal * 100_000_000);
+        // Use generateSalt from crypto lib (returns '0x'-prefixed hex)
+        const saltHex = generateSalt().replace('0x', '');
 
         try {
             addLog("Initializing secure salt generation...");
@@ -118,17 +150,35 @@ export const ProofGenerator = ({ account }: { account: any }) => {
     };
 
     const handleVerifyOnChain = async () => {
-        if (!account) {
-            notify("Session inactive: please connect your Starknet wallet.", "error");
-            setError("Session inactive: please connect your Starknet wallet.");
-            return;
-        }
-        if (!VERIFIER_ADDRESS) {
-            notify("System conflict: Verifier address not found.", "error");
-            setError("System conflict: Verifier address not found.");
-            return;
-        }
         if (!proofData) return;
+
+        // Auto-connect wallet if not already connected
+        let activeAccount = account;
+        if (!activeAccount) {
+            addLog("No wallet connected — opening wallet selector...");
+            try {
+                const { connect: connectWallet } = await import('get-starknet');
+                const wallet = await connectWallet({
+                    modalMode: 'alwaysAsk',
+                    modalTheme: 'dark',
+                });
+                if (!wallet || !wallet.isConnected) {
+                    throw new Error('Wallet connection cancelled');
+                }
+                activeAccount = wallet.account;
+                onWalletConnect?.(activeAccount);
+            } catch (e: any) {
+                notify("Wallet connection required to verify on-chain.", "error");
+                setError("Please connect your Starknet wallet to verify on-chain.");
+                return;
+            }
+        }
+
+        if (!VERIFIER_ADDRESS) {
+            notify("Deploy contracts and set NEXT_PUBLIC_VERIFIER_ADDRESS in .env.local.", "error");
+            setError("Verifier contract not deployed. Run deploy.mjs and set NEXT_PUBLIC_VERIFIER_ADDRESS in frontend/.env.local.");
+            return;
+        }
 
         setStatus('verifying');
         setError('');
@@ -155,7 +205,7 @@ export const ProofGenerator = ({ account }: { account: any }) => {
 
             addLog("Executing on-chain verification contract...");
 
-            const result = await account.execute([{
+            const result = await activeAccount.execute([{
                 contractAddress: VERIFIER_ADDRESS,
                 entrypoint: 'verify_proof',
                 calldata,
@@ -244,6 +294,21 @@ export const ProofGenerator = ({ account }: { account: any }) => {
                             <DemoBadge label="Whale-1" addr="1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa" onClick={setAddress} />
                             <DemoBadge label="Whale-2" addr="34xp4vRoCGJym3xR7yCVPFHoCNxv4Twseo" onClick={setAddress} />
                         </div>
+
+                        {/* Inline error display */}
+                        <AnimatePresence>
+                            {error && (
+                                <motion.div
+                                    initial={{ opacity: 0, y: -4 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    exit={{ opacity: 0 }}
+                                    className="mt-6 flex items-start gap-3 p-4 bg-red-500/5 border border-red-500/20 rounded-xl"
+                                >
+                                    <XCircle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
+                                    <p className="text-[10px] text-red-400 font-bold uppercase tracking-wide leading-relaxed">{error}</p>
+                                </motion.div>
+                            )}
+                        </AnimatePresence>
                     </motion.div>
 
                     {/* Console Trace */}
@@ -317,9 +382,10 @@ export const ProofGenerator = ({ account }: { account: any }) => {
                                         <button
                                             onClick={handleVerifyOnChain}
                                             disabled={status === 'verifying' || status === 'verified'}
-                                            className="btn-metallic flex-grow py-5 rounded-2xl text-[11px] font-black uppercase tracking-widest shadow-xl disabled:opacity-50"
+                                            className="btn-metallic flex-grow py-5 rounded-2xl text-[11px] font-black uppercase tracking-widest shadow-xl disabled:opacity-50 flex items-center justify-center gap-3"
                                         >
-                                            {status === 'verified' ? "Verification Confirmed" : "Transmit to Starknet"}
+                                            {status === 'verifying' && <Loader2 className="w-4 h-4 animate-spin" />}
+                                            {status === 'verified' ? "Verification Confirmed" : status === 'verifying' ? "Transmitting..." : "Transmit to Starknet"}
                                         </button>
                                         <button
                                             onClick={() => setShowInspector(true)}
@@ -330,6 +396,57 @@ export const ProofGenerator = ({ account }: { account: any }) => {
                                         </button>
                                     </div>
                                 </div>
+
+                                {/* On-chain verification result */}
+                                <AnimatePresence>
+                                    {status === 'verified' && txHash && (
+                                        <motion.div
+                                            key="tx-result"
+                                            initial={{ opacity: 0, y: 12 }}
+                                            animate={{ opacity: 1, y: 0 }}
+                                            className="glass-card p-8 border border-silver-primary/20 space-y-5"
+                                        >
+                                            <div className="flex items-center gap-3">
+                                                <CheckCircle className="w-5 h-5 text-silver-primary" />
+                                                <h4 className="text-sm font-black uppercase tracking-widest text-silver-primary">On-Chain Verification Confirmed</h4>
+                                            </div>
+                                            <div>
+                                                <p className="text-[9px] uppercase tracking-[0.2em] text-gray-500 font-black mb-2">Starknet Transaction Hash</p>
+                                                <div className="bg-black/40 border border-white/5 rounded-xl p-4 font-mono text-[11px] text-silver-primary/80 break-all">
+                                                    {txHash}
+                                                </div>
+                                            </div>
+                                            <div className="flex flex-wrap gap-3">
+                                                <a
+                                                    href={`https://sepolia.starkscan.co/tx/${txHash}`}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    className="flex items-center gap-2 px-5 py-2.5 bg-white/5 border border-white/10 rounded-xl text-[10px] font-black uppercase tracking-widest hover:border-silver-primary/30 transition-all"
+                                                >
+                                                    <ExternalLink className="w-3.5 h-3.5" />
+                                                    View on Starkscan
+                                                </a>
+                                                <button
+                                                    onClick={downloadCertificate}
+                                                    className="flex items-center gap-2 px-5 py-2.5 bg-white/5 border border-white/10 rounded-xl text-[10px] font-black uppercase tracking-widest hover:border-silver-primary/30 transition-all"
+                                                >
+                                                    <Download className="w-3.5 h-3.5" />
+                                                    Download Certificate
+                                                </button>
+                                                <button
+                                                    onClick={() => {
+                                                        navigator.clipboard.writeText(txHash);
+                                                        notify("Transaction hash copied.", "success");
+                                                    }}
+                                                    className="p-2.5 bg-white/5 border border-white/10 rounded-xl hover:bg-white/10 transition-colors"
+                                                    title="Copy transaction hash"
+                                                >
+                                                    <Copy className="w-3.5 h-3.5 text-silver-primary" />
+                                                </button>
+                                            </div>
+                                        </motion.div>
+                                    )}
+                                </AnimatePresence>
 
                                 <div className="glass-card p-4 metallic-border">
                                     <MerkleVisualizer

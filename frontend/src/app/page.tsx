@@ -71,7 +71,7 @@ export default function Home() {
                                 <p className="text-xs uppercase tracking-[0.4em] animate-pulse">Synchronizing Cryptographic Modules...</p>
                             </div>
                         }>
-                            <ProofGeneratorLazy account={account} />
+                            <ProofGeneratorLazy account={account} onWalletConnect={acc => setAccount(acc)} />
                         </React.Suspense>
                     </ErrorBoundary>
                 </div>
