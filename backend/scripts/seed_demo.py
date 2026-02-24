@@ -68,8 +68,11 @@ def seed():
 
         logger.info(f"Seeding {len(DEMO_ADDRESSES)} addresses at block {DEMO_BLOCK_HEIGHT}...")
 
-        # Sort deterministically (by address string)
-        sorted_items = sorted(DEMO_ADDRESSES.items(), key=lambda x: x[0])
+        # Sort deterministically by address_hash (SHA-256 mod P) per PRD MRK-01
+        sorted_items = sorted(
+            DEMO_ADDRESSES.items(),
+            key=lambda x: AddressUtils.get_address_hash(x[0]),
+        )
 
         # Build leaves
         leaves = []

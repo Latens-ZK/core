@@ -5,6 +5,8 @@ from typing import Dict, List, Tuple
 import logging
 from collections import defaultdict
 
+from ..crypto.address_utils import AddressUtils
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,17 +47,23 @@ class BalanceAggregator:
     
     def sort_addresses_deterministic(self, address_balances: Dict[str, int]) -> List[Tuple[str, int]]:
         """
-        Sort addresses deterministically (lexicographic order).
-        This ensures reproducible Merkle tree construction.
-        
+        Sort addresses deterministically by ascending address_hash (SHA-256 mod P as int).
+
+        Per PRD requirement MRK-01: leaf nodes MUST be ordered by ascending
+        address_hash so that Merkle tree construction is reproducible across
+        runs and environments.
+
         Args:
             address_balances: Address to balance mapping
-            
+
         Returns:
-            List of (address, balance) tuples sorted by address
+            List of (address, balance) tuples sorted by address_hash ascending
         """
-        sorted_items = sorted(address_balances.items(), key=lambda x: x[0])
-        logger.info(f"Sorted {len(sorted_items)} addresses deterministically")
+        sorted_items = sorted(
+            address_balances.items(),
+            key=lambda x: AddressUtils.get_address_hash(x[0]),
+        )
+        logger.info(f"Sorted {len(sorted_items)} addresses by address_hash (deterministic)")
         return sorted_items
     
     def validate_balances(self, address_balances: Dict[str, int]) -> bool:

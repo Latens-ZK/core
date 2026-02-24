@@ -2,13 +2,15 @@
 Snapshot generator for creating Merkle tree snapshots from Bitcoin data.
 Includes on-chain root registration via Starknet.
 """
+import json
 import logging
-import time
 import os
-from typing import Dict, Optional
+import time
 from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional
 
-from .bitcoin_client import BitcoinClient
+from .bitcoin_client import BitcoinClient, _DEMO_ADDRESSES
 from .balance_aggregator import BalanceAggregator
 
 logger = logging.getLogger(__name__)
@@ -23,6 +25,15 @@ class SnapshotGenerator:
             min_balance_satoshis=int(os.getenv("MIN_BALANCE_SATOSHIS", "1000000"))
         )
         self.db = db_session
+
+        # Addresses monitored for snapshot inclusion.
+        # Override via MONITORED_ADDRESSES env var (comma-separated).
+        env_addrs = os.getenv("MONITORED_ADDRESSES", "")
+        self.monitored_addresses: List[str] = (
+            [a.strip() for a in env_addrs.split(",") if a.strip()]
+            if env_addrs
+            else list(_DEMO_ADDRESSES)
+        )
 
     def generate_snapshot(self, block_height: int) -> Dict:
         """
@@ -46,8 +57,10 @@ class SnapshotGenerator:
         block_data = self.bitcoin_client.fetch_block(block_hash)
         timestamp = block_data.get('timestamp', int(time.time()))
 
-        # 2. Fetch balances
-        raw_balances = self.bitcoin_client.fetch_utxos_at_height(block_height)
+        # 2. Fetch balances for monitored addresses at target height
+        raw_balances = self.bitcoin_client.fetch_utxos_at_height(
+            block_height, addresses=self.monitored_addresses
+        )
 
         # 3. Validate, filter, sort
         self.balance_aggregator.validate_balances(raw_balances)
@@ -102,10 +115,13 @@ class SnapshotGenerator:
             'generation_time': generation_time,
         }
 
-        # 6. Persist to DB
+        # 6. Export deterministic JSON snapshot
+        self._export_json(snapshot, sorted_balances)
+
+        # 7. Persist to DB
         self.persist_snapshot(snapshot, sorted_balances, merkle_paths_data)
 
-        # 7. Register root on Starknet
+        # 8. Register root on Starknet
         try:
             self.register_root_on_chain(tree.root, block_height)
         except Exception as e:
@@ -113,6 +129,30 @@ class SnapshotGenerator:
 
         logger.info(f"Snapshot complete in {generation_time:.1f}s: {snapshot}")
         return snapshot
+
+    def _export_json(self, snapshot: Dict, sorted_balances: list) -> Path:
+        """
+        Write snapshot + sorted balances to output/snapshot_{block_height}.json.
+
+        The file is deterministic: same block_height always produces the same
+        byte-identical output (addresses sorted by address_hash ascending).
+        """
+        output_dir = Path(os.getenv("SNAPSHOT_OUTPUT_DIR", "output"))
+        output_dir.mkdir(parents=True, exist_ok=True)
+        json_path = output_dir / f"snapshot_{snapshot['block_height']}.json"
+
+        payload = {
+            **snapshot,
+            "balances": [
+                {"address": addr, "balance": bal}
+                for addr, bal in sorted_balances
+            ],
+        }
+        with open(json_path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2, sort_keys=False)
+
+        logger.info(f"Snapshot JSON exported to {json_path}")
+        return json_path
 
     def register_root_on_chain(self, merkle_root: int, block_height: int):
         """

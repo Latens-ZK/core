@@ -62,9 +62,9 @@ class AddressUtils:
                 except Exception:
                     return False
             elif address.lower().startswith('bc1'):
-                # Bech32 / Bech32m
-                hrp, data = bitcoin.bech32.decode(address)
-                return hrp == 'bc' and data is not None
+                # Bech32 / Bech32m — decode(hrp, addr) signature
+                data = bitcoin.bech32.decode('bc', address)
+                return data is not None and len(data) > 0
             else:
                 return False
 

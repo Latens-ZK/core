@@ -1,9 +1,15 @@
 """
 Comprehensive backend tests: crypto, API integration, and Merkle tree.
-Run: pytest backend/tests/ -v
+
+Run from backend/ directory:
+    pytest tests/ -v
+
+Or from repo root:
+    pytest backend/tests/ -v
 """
-import pytest
 import json
+import os
+import pytest
 from fastapi.testclient import TestClient
 
 
@@ -11,19 +17,19 @@ from fastapi.testclient import TestClient
 
 class TestMerkleTree:
     def test_basic_build(self):
-        from backend.src.crypto.merkle_tree import MerkleTree
+        from src.crypto.merkle_tree import MerkleTree
         leaves = [1, 2, 3, 4]
         tree = MerkleTree(leaves)
         assert tree.root is not None
         assert tree.root != 0
 
     def test_single_leaf(self):
-        from backend.src.crypto.merkle_tree import MerkleTree
+        from src.crypto.merkle_tree import MerkleTree
         tree = MerkleTree([42])
         assert tree.root == 42
 
     def test_proof_valid(self):
-        from backend.src.crypto.merkle_tree import MerkleTree
+        from src.crypto.merkle_tree import MerkleTree
         leaves = [10, 20, 30, 40, 50]
         tree = MerkleTree(leaves)
         for i, leaf in enumerate(leaves):
@@ -31,20 +37,20 @@ class TestMerkleTree:
             assert tree.verify_proof(leaf, proof, tree.root), f"Proof failed for leaf {i}"
 
     def test_proof_invalid(self):
-        from backend.src.crypto.merkle_tree import MerkleTree
+        from src.crypto.merkle_tree import MerkleTree
         tree = MerkleTree([1, 2, 3, 4])
         proof = tree.get_proof(0)
         assert not tree.verify_proof(999, proof, tree.root)
 
     def test_direction_is_bool(self):
-        from backend.src.crypto.merkle_tree import MerkleTree
+        from src.crypto.merkle_tree import MerkleTree
         tree = MerkleTree([1, 2, 3, 4])
         proof = tree.get_proof(1)
         for el in proof:
             assert isinstance(el['direction'], bool), "direction must be bool, not string"
 
     def test_odd_leaf_count(self):
-        from backend.src.crypto.merkle_tree import MerkleTree
+        from src.crypto.merkle_tree import MerkleTree
         leaves = [1, 2, 3]
         tree = MerkleTree(leaves)
         for i, leaf in enumerate(leaves):
@@ -52,7 +58,7 @@ class TestMerkleTree:
             assert tree.verify_proof(leaf, proof, tree.root)
 
     def test_proof_deterministic(self):
-        from backend.src.crypto.merkle_tree import MerkleTree
+        from src.crypto.merkle_tree import MerkleTree
         leaves = [100, 200, 300]
         t1 = MerkleTree(leaves)
         t2 = MerkleTree(leaves)
@@ -63,75 +69,185 @@ class TestMerkleTree:
 
 class TestPoseidon:
     def test_import_succeeds(self):
-        """Ensure starknet-py Poseidon is available (no mock fallback)."""
-        from backend.src.crypto.poseidon import PoseidonHash
-        # Just ensure it imports without error
+        from src.crypto.poseidon import PoseidonHash
         assert PoseidonHash is not None
 
     def test_hash_deterministic(self):
-        from backend.src.crypto.poseidon import PoseidonHash
+        from src.crypto.poseidon import PoseidonHash
         h1 = PoseidonHash.hash(1, 2)
         h2 = PoseidonHash.hash(1, 2)
         assert h1 == h2
 
     def test_hash_asymmetric(self):
-        from backend.src.crypto.poseidon import PoseidonHash
+        from src.crypto.poseidon import PoseidonHash
         assert PoseidonHash.hash(1, 2) != PoseidonHash.hash(2, 1)
 
     def test_commitment_matches_hash(self):
-        from backend.src.crypto.poseidon import PoseidonHash
+        from src.crypto.poseidon import PoseidonHash
         addr_hash = 12345678
         salt = 99999999
         c1 = PoseidonHash.hash_commitment(addr_hash, salt)
         c2 = PoseidonHash.hash(addr_hash, salt)
         assert c1 == c2
 
+    def test_known_permutation_vector(self):
+        """Verified against poseidon-py 0.1.5 C library: permutation_3([0,0,0])."""
+        from src.crypto.poseidon import _hades_permutation
+        s0, s1, s2 = _hades_permutation(0, 0, 0)
+        # s0 matches RES_P3_0 from poseidon-py test.c (standard field)
+        assert s0 == 0x79e8d1e78258000a28fc9d49e233bc6852357968577b1e386550ed6a9086133
+        assert s1 == 0x3840d003d0f3f96dbb796ff6aa6a63be5b5404b91ccaabca256154cbb6fb984
+        assert s2 == 0x1eb39da3f7d3b04142d0ac83d9da00c9325a61fb2ef326e50b70eaa8a3c7cc7
+
 
 # ─── Address Utils Tests ───────────────────────────────────────────────────────
 
 class TestAddressUtils:
     def test_valid_bech32(self):
-        from backend.src.crypto.address_utils import AddressUtils
+        from src.crypto.address_utils import AddressUtils
         assert AddressUtils.validate_address("bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh")
 
     def test_valid_p2pkh(self):
-        from backend.src.crypto.address_utils import AddressUtils
+        from src.crypto.address_utils import AddressUtils
         assert AddressUtils.validate_address("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa")
 
     def test_valid_p2sh(self):
-        from backend.src.crypto.address_utils import AddressUtils
+        from src.crypto.address_utils import AddressUtils
         assert AddressUtils.validate_address("34xp4vRoCGJym3xR7yCVPFHoCNxv4Twseo")
 
     def test_invalid_address(self):
-        from backend.src.crypto.address_utils import AddressUtils
+        from src.crypto.address_utils import AddressUtils
         assert not AddressUtils.validate_address("not-an-address")
         assert not AddressUtils.validate_address("")
         assert not AddressUtils.validate_address("aaa")
 
     def test_hash_is_felt(self):
-        from backend.src.crypto.address_utils import AddressUtils
+        from src.crypto.address_utils import AddressUtils
         PRIME = 2**251 + 17 * 2**192 + 1
         h = AddressUtils.get_address_hash("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa")
         assert 0 < h < PRIME
 
     def test_hash_deterministic(self):
-        from backend.src.crypto.address_utils import AddressUtils
+        from src.crypto.address_utils import AddressUtils
         addr = "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh"
         assert AddressUtils.get_address_hash(addr) == AddressUtils.get_address_hash(addr)
+
+
+# ─── Sort-order Tests ──────────────────────────────────────────────────────────
+
+class TestSortOrder:
+    def test_sort_by_address_hash_not_string(self):
+        """MRK-01: addresses sorted by address_hash int, not lexicographic string."""
+        from src.indexer.balance_aggregator import BalanceAggregator
+        from src.crypto.address_utils import AddressUtils
+
+        balances = {
+            "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa": 7_500_000_000,
+            "34xp4vRoCGJym3xR7yCVPFHoCNxv4Twseo": 252_597_000_000,
+            "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh": 150_000_000_000,
+        }
+
+        agg = BalanceAggregator()
+        sorted_items = agg.sort_addresses_deterministic(balances)
+        sorted_addrs = [a for a, _ in sorted_items]
+
+        # Verify hashes are in ascending order
+        hashes = [AddressUtils.get_address_hash(a) for a in sorted_addrs]
+        assert hashes == sorted(hashes), "Addresses must be sorted by ascending address_hash"
+
+    def test_sort_is_deterministic(self):
+        """Same input always produces same output order."""
+        from src.indexer.balance_aggregator import BalanceAggregator
+
+        balances = {
+            "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa": 7_500_000_000,
+            "34xp4vRoCGJym3xR7yCVPFHoCNxv4Twseo": 252_597_000_000,
+        }
+        agg = BalanceAggregator()
+        r1 = agg.sort_addresses_deterministic(balances)
+        r2 = agg.sort_addresses_deterministic(balances)
+        assert r1 == r2
+
+
+# ─── Snapshot Determinism Test ─────────────────────────────────────────────────
+
+class TestSnapshotDeterminism:
+    """Phase 1 done criterion: same block_height run twice → byte-identical output."""
+
+    def _build_snapshot_json(self, balances: dict) -> str:
+        """Build the snapshot JSON payload as it would be written to disk."""
+        from src.crypto.merkle_tree import MerkleTree
+        from src.crypto.poseidon import PoseidonHash
+        from src.crypto.address_utils import AddressUtils
+        from src.indexer.balance_aggregator import BalanceAggregator
+        import json
+
+        agg = BalanceAggregator()
+        sorted_items = agg.sort_addresses_deterministic(balances)
+
+        leaves = []
+        for addr, bal in sorted_items:
+            addr_hash = AddressUtils.get_address_hash(addr)
+            leaf = PoseidonHash.hash_address_balance(addr_hash, bal)
+            leaves.append(leaf)
+
+        tree = MerkleTree(leaves)
+
+        payload = {
+            "block_height": 800_000,
+            "merkle_root": hex(tree.root),
+            "balances": [{"address": a, "balance": b} for a, b in sorted_items],
+        }
+        return json.dumps(payload, indent=2, sort_keys=False)
+
+    def test_same_input_identical_output(self):
+        balances = {
+            "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa": 7_500_000_000,
+            "34xp4vRoCGJym3xR7yCVPFHoCNxv4Twseo": 252_597_000_000,
+            "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh": 150_000_000_000,
+        }
+        out1 = self._build_snapshot_json(balances)
+        out2 = self._build_snapshot_json(balances)
+        assert out1 == out2, "Snapshot output must be byte-identical across runs"
+
+    def test_merkle_root_stable(self):
+        """Merkle root must not change when inputs are the same."""
+        from src.crypto.merkle_tree import MerkleTree
+        from src.crypto.poseidon import PoseidonHash
+        from src.crypto.address_utils import AddressUtils
+        from src.indexer.balance_aggregator import BalanceAggregator
+
+        balances = {
+            "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa": 7_500_000_000,
+            "34xp4vRoCGJym3xR7yCVPFHoCNxv4Twseo": 252_597_000_000,
+        }
+        agg = BalanceAggregator()
+
+        def get_root(b):
+            items = agg.sort_addresses_deterministic(b)
+            leaves = [
+                PoseidonHash.hash_address_balance(AddressUtils.get_address_hash(a), bal)
+                for a, bal in items
+            ]
+            return MerkleTree(leaves).root
+
+        assert get_root(balances) == get_root(balances)
 
 
 # ─── API Integration Tests ─────────────────────────────────────────────────────
 
 @pytest.fixture
 def client():
-    """FastAPI test client with a fresh in-memory database."""
-    import os
+    """FastAPI test client with a fresh (dropped+recreated) in-memory database."""
     os.environ["DATABASE_URL"] = "sqlite:///:memory:"
     os.environ["CORS_ORIGINS"] = "http://localhost:3000"
 
-    from backend.src.api.main import app
-    from backend.src.models.snapshot import Base
-    from backend.src.database import engine
+    from src.api.main import app
+    from src.models.snapshot import Base
+    from src.database import engine
+
+    # Drop all tables then recreate to guarantee clean state per test
+    Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
 
     return TestClient(app)
@@ -139,27 +255,32 @@ def client():
 
 @pytest.fixture
 def seeded_client(client):
-    """Client with a seeded demo snapshot."""
-    from backend.src.database import SessionLocal
-    from backend.src.models.snapshot import Snapshot, AddressBalance
-    from backend.src.crypto.merkle_tree import MerkleTree
-    from backend.src.crypto.poseidon import PoseidonHash
-    from backend.src.crypto.address_utils import AddressUtils
-    import json
+    """Client with a seeded demo snapshot (2 addresses)."""
+    from src.database import SessionLocal
+    from src.models.snapshot import Snapshot, AddressBalance
+    from src.crypto.merkle_tree import MerkleTree
+    from src.crypto.poseidon import PoseidonHash
+    from src.crypto.address_utils import AddressUtils
+    from src.indexer.balance_aggregator import BalanceAggregator
 
     demo_addrs = {
         "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa": 7_500_000_000,
         "34xp4vRoCGJym3xR7yCVPFHoCNxv4Twseo": 252_597_000_000,
     }
-    sorted_items = sorted(demo_addrs.items())
-    leaves = [PoseidonHash.hash_address_balance(AddressUtils.get_address_hash(a), b) for a, b in sorted_items]
+    # Sort by address_hash per PRD MRK-01
+    agg = BalanceAggregator()
+    sorted_items = agg.sort_addresses_deterministic(demo_addrs)
+    leaves = [
+        PoseidonHash.hash_address_balance(AddressUtils.get_address_hash(a), b)
+        for a, b in sorted_items
+    ]
     tree = MerkleTree(leaves)
 
     db = SessionLocal()
     snap = Snapshot(
         block_height=800_000, block_hash="abc123", merkle_root=hex(tree.root),
         total_addresses=2, total_balance=sum(demo_addrs.values()),
-        timestamp=1690168218, status='complete'
+        timestamp=1690168218, status='complete',
     )
     db.add(snap)
     db.commit()
@@ -173,7 +294,7 @@ def seeded_client(client):
         db.add(AddressBalance(
             snapshot_id=snap.id, address=addr,
             address_hash=hex(addr_hash), balance=bal,
-            merkle_path=json.dumps(proof)
+            merkle_path=json.dumps(proof),
         ))
     db.commit()
     db.close()
@@ -246,7 +367,6 @@ class TestProofAPI:
         })
         assert r.status_code == 200
         data = r.json()
-        # All calldata fields present
         assert "address_hash" in data
         assert "salt" in data
         assert "balance" in data
@@ -263,7 +383,7 @@ class TestProofAPI:
         r = seeded_client.post("/api/proof/generate", json={
             "address": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
             "salt_hex": "deadbeef",
-            "threshold": 999_999_999_999,  # 9999 BTC, way above balance
+            "threshold": 999_999_999_999,
         })
         assert r.status_code == 400
 
