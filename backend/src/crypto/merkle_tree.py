@@ -107,6 +107,17 @@ class MerkleTree:
         Returns:
             True if proof is valid
         """
+        return MerkleTree.verify_proof_static(leaf, proof, root)
+
+    @staticmethod
+    def verify_proof_static(leaf: int, proof: List[Dict], root: int) -> bool:
+        """
+        Static version of verify_proof — no tree instance needed.
+
+        direction semantics (matches Cairo compute_merkle_root):
+          False → sibling is LEFT  → hash(sibling, current)
+          True  → sibling is RIGHT → hash(current, sibling)
+        """
         current_hash = leaf
 
         for item in proof:

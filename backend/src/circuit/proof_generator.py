@@ -3,7 +3,7 @@ Proof generator — Python simulation of the Cairo circuit.
 Returns verified calldata for the Starknet BalanceVerifier contract.
 """
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -106,9 +106,49 @@ class ProofGenerator:
 
         # 3. Verify Merkle inclusion
         leaf_hash = PoseidonHash.hash_address_balance(address_hash, balance)
-        tree = MerkleTree()
-        if not tree.verify_proof(leaf_hash, merkle_path, snapshot_root):
+        if not MerkleTree.verify_proof_static(leaf_hash, merkle_path, snapshot_root):
             logger.error("Merkle proof verification failed")
             return False
 
         return True
+
+    def generate_calldata(
+        self,
+        address_hash: int,
+        salt: int,
+        balance: int,
+        merkle_path: List[Dict],
+        commitment: int,
+        threshold: int,
+        block_height: Optional[int] = None,
+    ) -> List[int]:
+        """
+        Encode calldata for BalanceVerifier.verify_proof() or verify_proof_at_height().
+
+        Starknet ABI encoding for:
+            verify_proof(address_hash, salt, balance, merkle_path, commitment, threshold)
+            verify_proof_at_height(..., block_height)  ← if block_height is provided
+
+        MerklePathElement serialises as: [value: felt252, direction: felt252 (0/1)]
+
+        Returns:
+            List of ints (felt252 values) to pass as Starknet calldata.
+        """
+        calldata: List[int] = [
+            address_hash,
+            salt,
+            balance,              # u64 → single felt
+            len(merkle_path),     # Array length prefix
+        ]
+
+        for element in merkle_path:
+            calldata.append(element['value'])
+            calldata.append(1 if element['direction'] else 0)
+
+        calldata.append(commitment)
+        calldata.append(threshold)  # u64 → single felt
+
+        if block_height is not None:
+            calldata.append(block_height)  # for verify_proof_at_height
+
+        return calldata

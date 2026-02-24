@@ -2,21 +2,27 @@ use starknet::ContractAddress;
 
 // ─── Interface for the Registry ───────────────────────────────────────────────
 #[starknet::interface]
-trait IStateRootRegistryDispatch<TContractState> {
+pub trait IStateRootRegistryDispatch<TContractState> {
     fn get_root(self: @TContractState) -> felt252;
     fn get_root_at_height(self: @TContractState, height: u64) -> felt252;
 }
 
 // ─── Structs ──────────────────────────────────────────────────────────────────
-#[derive(Drop, Serde)]
-struct MerklePathElement {
+/// One element of a Merkle inclusion proof.
+///
+/// `direction` semantics (matches Python MerkleTree):
+///   false → sibling is LEFT  (current node is the right child)  → hash(sibling, current)
+///   true  → sibling is RIGHT (current node is the left child)   → hash(current, sibling)
+#[derive(Drop, Serde, Copy)]
+pub struct MerklePathElement {
     value: felt252,
-    direction: bool, // false = sibling is left, true = sibling is right
+    direction: bool,
 }
 
 // ─── Interface ────────────────────────────────────────────────────────────────
 #[starknet::interface]
-trait IBalanceVerifier<TContractState> {
+pub trait IBalanceVerifier<TContractState> {
+    /// Verify against the LATEST on-chain root.
     fn verify_proof(
         ref self: TContractState,
         address_hash: felt252,
@@ -27,6 +33,7 @@ trait IBalanceVerifier<TContractState> {
         threshold: u64,
     ) -> bool;
 
+    /// Verify against a specific historical root.
     fn verify_proof_at_height(
         ref self: TContractState,
         address_hash: felt252,
@@ -43,11 +50,14 @@ trait IBalanceVerifier<TContractState> {
 
 // ─── Contract ─────────────────────────────────────────────────────────────────
 #[starknet::contract]
-mod BalanceVerifier {
-    use super::{MerklePathElement, IStateRootRegistryDispatchDispatcher, IStateRootRegistryDispatchDispatcherTrait};
+pub mod BalanceVerifier {
+    use super::{
+        MerklePathElement,
+        IStateRootRegistryDispatchDispatcher,
+        IStateRootRegistryDispatchDispatcherTrait,
+    };
     use starknet::{ContractAddress, get_block_timestamp};
-    use core::poseidon::PoseidonTrait;
-    use core::hash::{HashStateTrait, HashStateExTrait};
+    use core::poseidon::hades_permutation;
 
     #[storage]
     struct Storage {
@@ -76,7 +86,7 @@ mod BalanceVerifier {
     }
 
     // ─── External ─────────────────────────────────────────────────────────────
-    #[external(v0)]
+    #[abi(embed_v0)]
     impl BalanceVerifierImpl of super::IBalanceVerifier<ContractState> {
         /// Verify against the LATEST on-chain root.
         fn verify_proof(
@@ -88,17 +98,21 @@ mod BalanceVerifier {
             commitment: felt252,
             threshold: u64,
         ) -> bool {
-            // Fetch root from registry — this is the trust anchor
             let registry = IStateRootRegistryDispatchDispatcher {
                 contract_address: self.registry_address.read()
             };
             let snapshot_root = registry.get_root();
             assert(snapshot_root != 0, 'No root registered yet');
 
-            _verify(ref self, address_hash, salt, balance, merkle_path, commitment, threshold, snapshot_root)
+            _verify(
+                ref self,
+                address_hash, salt, balance,
+                merkle_path, commitment, threshold,
+                snapshot_root,
+            )
         }
 
-        /// Verify against a specific historical root (for older snapshots).
+        /// Verify against a specific historical root.
         fn verify_proof_at_height(
             ref self: ContractState,
             address_hash: felt252,
@@ -115,7 +129,12 @@ mod BalanceVerifier {
             let snapshot_root = registry.get_root_at_height(block_height);
             assert(snapshot_root != 0, 'No root at this height');
 
-            _verify(ref self, address_hash, salt, balance, merkle_path, commitment, threshold, snapshot_root)
+            _verify(
+                ref self,
+                address_hash, salt, balance,
+                merkle_path, commitment, threshold,
+                snapshot_root,
+            )
         }
 
         fn get_registry(self: @ContractState) -> ContractAddress {
@@ -124,6 +143,14 @@ mod BalanceVerifier {
     }
 
     // ─── Internal ─────────────────────────────────────────────────────────────
+
+    /// Core verification logic.
+    ///
+    /// Poseidon PAIR hash used throughout:
+    ///   pair_hash(x, y) = hades_permutation(x, y, 2).s0
+    ///
+    /// This matches Python `PoseidonHash.hash(x, y)` = `_hades_permutation(x, y, 2)[0]`
+    /// and starknet-py `poseidon_hash(x, y)` = `hades_permutation(x, y, 2)[0]`.
     fn _verify(
         ref self: ContractState,
         address_hash: felt252,
@@ -134,29 +161,22 @@ mod BalanceVerifier {
         threshold: u64,
         snapshot_root: felt252,
     ) -> bool {
-        // 1. Verify commitment: Poseidon(address_hash, salt) == commitment
-        let calculated_commitment = PoseidonTrait::new()
-            .update(address_hash)
-            .update(salt)
-            .finalize();
-        assert(calculated_commitment == commitment, 'Invalid commitment');
+        // ── C-01: commitment = Poseidon(address_hash, salt) ──────────────────
+        let (calc_commitment, _, _) = hades_permutation(address_hash, salt, 2);
+        assert(calc_commitment == commitment, 'Invalid commitment');
 
-        // 2. Verify threshold
+        // ── C-03: balance >= threshold (if set) ──────────────────────────────
         if threshold > 0 {
             assert(balance >= threshold, 'Balance below threshold');
         }
 
-        // 3. Reconstruct Merkle leaf: Poseidon(address_hash, balance)
-        let leaf_hash = PoseidonTrait::new()
-            .update(address_hash)
-            .update(balance.into())
-            .finalize();
-
-        // 4. Traverse Merkle path to root
+        // ── C-02: Merkle root = recompute(leaf, path) ────────────────────────
+        //   leaf = Poseidon(address_hash, balance_as_felt252)
+        let (leaf_hash, _, _) = hades_permutation(address_hash, balance.into(), 2);
         let calculated_root = compute_merkle_root(leaf_hash, merkle_path);
         assert(calculated_root == snapshot_root, 'Invalid Merkle proof');
 
-        // 5. Emit event
+        // ── Emit ProofVerified ───────────────────────────────────────────────
         self.emit(ProofVerified {
             commitment,
             threshold,
@@ -166,33 +186,31 @@ mod BalanceVerifier {
         true
     }
 
+    /// Recompute Merkle root from leaf + proof path.
+    ///
+    /// direction semantics (mirrors Python MerkleTree.verify_proof):
+    ///   false → sibling is LEFT  → hash(sibling, current)
+    ///   true  → sibling is RIGHT → hash(current, sibling)
     fn compute_merkle_root(leaf: felt252, mut path: Array<MerklePathElement>) -> felt252 {
-        let mut current_hash = leaf;
+        let mut current = leaf;
 
         loop {
             match path.pop_front() {
-                Option::Some(element) => {
-                    let sibling = element.value;
-                    // direction: false = sibling is left, current goes right
-                    //            true  = sibling is right, current goes left
-                    if !element.direction {
-                        // sibling left, current right
-                        current_hash = PoseidonTrait::new()
-                            .update(sibling)
-                            .update(current_hash)
-                            .finalize();
+                Option::Some(el) => {
+                    let sibling = el.value;
+                    let (next, _, _) = if !el.direction {
+                        // sibling is LEFT → hash(sibling, current)
+                        hades_permutation(sibling, current, 2)
                     } else {
-                        // sibling right, current left
-                        current_hash = PoseidonTrait::new()
-                            .update(current_hash)
-                            .update(sibling)
-                            .finalize();
-                    }
+                        // sibling is RIGHT → hash(current, sibling)
+                        hades_permutation(current, sibling, 2)
+                    };
+                    current = next;
                 },
-                Option::None => { break; }
+                Option::None => { break; },
             };
         };
 
-        current_hash
+        current
     }
 }

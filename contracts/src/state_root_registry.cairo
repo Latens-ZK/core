@@ -1,7 +1,7 @@
 use starknet::ContractAddress;
 
 #[starknet::interface]
-trait IStateRootRegistry<TContractState> {
+pub trait IStateRootRegistry<TContractState> {
     fn update_root(ref self: TContractState, new_root: felt252, height: u64);
     fn get_root(self: @TContractState) -> felt252;
     fn get_root_at_height(self: @TContractState, height: u64) -> felt252;
@@ -10,7 +10,7 @@ trait IStateRootRegistry<TContractState> {
 }
 
 #[starknet::contract]
-mod StateRootRegistry {
+pub mod StateRootRegistry {
     use starknet::{ContractAddress, get_caller_address, get_block_timestamp};
 
     #[storage]
@@ -45,12 +45,16 @@ mod StateRootRegistry {
     }
 
     // ─── External ─────────────────────────────────────────────────────────────
-    #[external(v0)]
+    #[abi(embed_v0)]
     impl StateRootRegistryImpl of super::IStateRootRegistry<ContractState> {
         fn update_root(ref self: ContractState, new_root: felt252, height: u64) {
             let caller = get_caller_address();
             let admin = self.admin.read();
             assert(caller == admin, 'Unauthorized: admin only');
+
+            // REG-02: block height must strictly increase
+            let current_height = self.block_height.read();
+            assert(height > current_height, 'Height must be greater');
 
             let ts = get_block_timestamp();
 
