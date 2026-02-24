@@ -1,0 +1,9 @@
+[package]
+name = "latens_contracts"
+version = "0.1.0"
+
+[dependencies]
+starknet = "2.5.4"
+
+[[target.starknet-contract]]
+sierra = true

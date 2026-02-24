@@ -1,0 +1,46 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground-rgb: 220, 220, 220;
+  --background-start-rgb: 10, 10, 10;
+  --background-end-rgb: 0, 0, 0;
+
+  --silver-primary: #c0c0c0;
+  --silver-secondary: #8a8a8a;
+  --charcoal-bg: #121212;
+  --glass-bg: rgba(255, 255, 255, 0.03);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --accent-silver: #e5e7eb;
+}
+
+@layer base {
+  body {
+    @apply antialiased selection:bg-silver-secondary/30 text-accent-silver bg-black;
+    background: radial-gradient(circle at top center, #1a1a1a 0%, #000000 100%);
+    min-height: 100vh;
+  }
+}
+
+@layer components {
+  .glass-card {
+    @apply bg-glass-bg backdrop-blur-xl border border-glass-border rounded-2xl;
+  }
+
+  .metallic-border {
+    position: relative;
+    border: 1px solid transparent;
+    background: linear-gradient(135deg, #262626, #000) padding-box,
+      linear-gradient(135deg, #666, #222) border-box;
+  }
+
+  .text-glow-silver {
+    text-shadow: 0 0 20px rgba(192, 192, 192, 0.2);
+  }
+
+  .btn-metallic {
+    @apply bg-gradient-to-b from-[#333] to-[#111] border border-white/10 text-white font-medium hover:from-[#444] hover:to-[#222] transition-all shadow-lg;
+    box-shadow: 0 4px 15px -5px rgba(0, 0, 0, 0.5);
+  }
+}
