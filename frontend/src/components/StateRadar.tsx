@@ -4,16 +4,46 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Radio, Activity, Terminal, CheckCircle2, Clock } from 'lucide-react';
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+
+interface SnapshotInfo {
+    block_height: number;
+    merkle_root: string;
+    total_addresses: number;
+}
+
 export const StateRadar = () => {
-    const [blocksProcessed, setBlocksProcessed] = useState(824500);
-    const [isScanning, setIsScanning] = useState(true);
+    const [snapshot, setSnapshot] = useState<SnapshotInfo | null>(null);
+    const [synced, setSynced] = useState(false);
 
     useEffect(() => {
-        const interval = setInterval(() => {
-            setBlocksProcessed(prev => prev + (Math.random() > 0.8 ? 1 : 0));
-        }, 3000);
+        const fetchSnapshot = async () => {
+            try {
+                const res = await fetch(`${API_URL}/snapshot/latest`);
+                if (res.ok) {
+                    const data = await res.json();
+                    setSnapshot(data);
+                    setSynced(true);
+                }
+            } catch {
+                // API offline — keep previous data or show defaults
+            }
+        };
+
+        fetchSnapshot();
+        const interval = setInterval(fetchSnapshot, 15000);
         return () => clearInterval(interval);
     }, []);
+
+    const rootDisplay = snapshot?.merkle_root
+        ? `${snapshot.merkle_root.slice(0, 6)}...${snapshot.merkle_root.slice(-4)}`
+        : '—';
+    const heightDisplay = snapshot?.block_height
+        ? `${Math.floor(snapshot.block_height / 1000)}k`
+        : '—';
+    const addressDisplay = snapshot?.total_addresses
+        ? `${snapshot.total_addresses} addrs`
+        : '—';
 
     return (
         <div className="glass-card metallic-border p-8 mb-24 max-w-5xl mx-auto overflow-hidden relative">
@@ -41,7 +71,7 @@ export const StateRadar = () => {
 
                     {/* Ping Particles */}
                     <AnimatePresence>
-                        {isScanning && Array.from({ length: 3 }).map((_, i) => (
+                        {synced && Array.from({ length: 3 }).map((_, i) => (
                             <motion.div
                                 key={i}
                                 initial={{ scale: 0, opacity: 0.5 }}
@@ -60,27 +90,31 @@ export const StateRadar = () => {
                             <h4 className="text-2xl font-bold text-white tracking-tight">Bitcoin Core Observer</h4>
                         </div>
                         <div className="flex items-center gap-3 px-4 py-2 bg-white/5 border border-white/10 rounded-xl">
-                            <Activity className="w-4 h-4 text-silver-primary animate-pulse" />
-                            <span className="text-[10px] font-bold text-silver-primary uppercase tracking-widest">Live Feed</span>
+                            <Activity className={`w-4 h-4 ${synced ? 'text-silver-primary animate-pulse' : 'text-gray-600'}`} />
+                            <span className="text-[10px] font-bold text-silver-primary uppercase tracking-widest">
+                                {synced ? 'Live Feed' : 'Connecting'}
+                            </span>
                         </div>
                     </div>
 
                     <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                         <StatusItem icon={<Clock className="w-3.5 h-3.5" />} label="Avg Block Time" value="9.8 min" />
-                        <StatusItem icon={<Terminal className="w-3.5 h-3.5" />} label="State Root" value="0x5f...a231" />
-                        <StatusItem icon={<CheckCircle2 className="w-3.5 h-3.5" />} label="Verified Range" value="824k - 825k" />
-                        <StatusItem icon={<Activity className="w-3.5 h-3.5" />} label="Sync Integrity" value="99.99%" />
+                        <StatusItem icon={<Terminal className="w-3.5 h-3.5" />} label="State Root" value={rootDisplay} />
+                        <StatusItem icon={<CheckCircle2 className="w-3.5 h-3.5" />} label="Snapshot Height" value={heightDisplay} />
+                        <StatusItem icon={<Activity className="w-3.5 h-3.5" />} label="Addresses" value={addressDisplay} />
                     </div>
 
                     <div className="pt-4 border-t border-white/5">
                         <div className="flex justify-between items-end mb-2">
                             <p className="text-[9px] text-gray-500 font-bold uppercase tracking-widest">Consensus Finalization</p>
-                            <p className="text-[11px] font-mono text-silver-primary">Height: {blocksProcessed.toLocaleString()}</p>
+                            <p className="text-[11px] font-mono text-silver-primary">
+                                Height: {snapshot?.block_height?.toLocaleString() ?? '—'}
+                            </p>
                         </div>
                         <div className="w-full h-1.5 bg-white/5 rounded-full overflow-hidden">
                             <motion.div
                                 initial={{ width: "0%" }}
-                                animate={{ width: "94.2%" }}
+                                animate={{ width: synced ? "100%" : "0%" }}
                                 className="h-full bg-gradient-to-r from-silver-secondary to-silver-primary shadow-[0_0_10px_rgba(192,192,192,0.5)]"
                                 transition={{ duration: 2 }}
                             />

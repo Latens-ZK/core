@@ -5,7 +5,10 @@ sqlalchemy==2.0.25
 pydantic==2.5.3
 pydantic-settings==2.1.0
 python-bitcoinlib==0.12.2
-starknet-py==0.29.0
+# starknet-py is optional — only needed for on-chain root registration.
+# It does not install on Python 3.13 (C extension incompatibility).
+# Install manually on Python ≤3.12 if you need live Starknet writes:
+#   pip install starknet-py==0.29.0
 pytest==7.4.4
 pytest-asyncio==0.23.3
 httpx==0.26.0

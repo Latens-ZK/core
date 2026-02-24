@@ -60,7 +60,11 @@ class ProofResponse(BaseModel):
     threshold: int
     block_height: int
 
-    # Legacy / diagnostic
+    # Pre-encoded Starknet ABI calldata for BalanceVerifier.verify_proof()
+    # Pass directly as calldata: account.execute([{contractAddress, entrypoint, calldata: starknet_calldata}])
+    starknet_calldata: List[str]  # list of decimal felt252 strings
+
+    # Diagnostic
     proof: str
     public_signals: List[Any]
     verified_locally: bool
@@ -149,6 +153,17 @@ async def generate_proof(req: ProofRequest):
             for el in raw_path
         ]
 
+        # 8. Pre-encode Starknet ABI calldata for BalanceVerifier.verify_proof()
+        calldata_ints = proof_gen.generate_calldata(
+            address_hash=addr_hash,
+            salt=salt,
+            balance=addr_balance.balance,
+            merkle_path=raw_path,
+            commitment=commitment,
+            threshold=req.threshold,
+        )
+        starknet_calldata = [str(v) for v in calldata_ints]
+
         return ProofResponse(
             # Calldata fields
             address_hash=hex(addr_hash),
@@ -159,6 +174,8 @@ async def generate_proof(req: ProofRequest):
             commitment=hex(commitment),
             threshold=req.threshold,
             block_height=snapshot.block_height,
+            # Pre-encoded Starknet calldata
+            starknet_calldata=starknet_calldata,
             # Diagnostic
             proof=result['proof'],
             public_signals=result['public_signals'],

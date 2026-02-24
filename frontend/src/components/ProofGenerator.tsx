@@ -136,22 +136,22 @@ export const ProofGenerator = ({ account }: { account: any }) => {
         addLog("Serializing proof for Starknet execution...");
 
         try {
-            const merklePathCalldata: string[] = [
-                proofData.merkle_path.length.toString(),
-                ...proofData.merkle_path.flatMap((el: { value: number; direction: boolean }) => [
-                    el.value.toString(),
-                    el.direction ? '1' : '0',
-                ]),
-            ];
-
-            const calldata = [
-                proofData.address_hash,
-                proofData.salt,
-                proofData.balance.toString(),
-                ...merklePathCalldata,
-                proofData.commitment,
-                proofData.threshold.toString(),
-            ];
+            // Use pre-encoded calldata from the API (already ABI-encoded by the backend).
+            // Fallback to manual construction if not present.
+            const calldata: string[] = proofData.starknet_calldata
+                ? proofData.starknet_calldata
+                : [
+                    proofData.address_hash,
+                    proofData.salt,
+                    proofData.balance.toString(),
+                    proofData.merkle_path.length.toString(),
+                    ...proofData.merkle_path.flatMap((el: { value: number; direction: boolean }) => [
+                        el.value.toString(),
+                        el.direction ? '1' : '0',
+                    ]),
+                    proofData.commitment,
+                    proofData.threshold.toString(),
+                ];
 
             addLog("Executing on-chain verification contract...");
 

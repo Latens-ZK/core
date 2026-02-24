@@ -43,7 +43,7 @@ export const MerkleVisualizer = ({ leaf, path, root, isVerified }: MerkleVisuali
 
                 {/* Path Nodes (Simplified for Visual Clarity) */}
                 <div className="flex flex-col items-center gap-8 w-full max-w-xs relative">
-                    <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-px bg-gradient-to-b from- silver-primary/50 to-transparent -z-10" />
+                    <div className="absolute top-0 bottom-0 left-1/2 -translate-x-1/2 w-px bg-gradient-to-b from-silver-primary/50 to-transparent -z-10" />
 
                     {path.map((step, i) => (
                         <div key={i} className="flex items-center justify-between w-full relative">

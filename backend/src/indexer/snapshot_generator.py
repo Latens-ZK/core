@@ -174,11 +174,18 @@ class SnapshotGenerator:
             )
             return
 
-        from starknet_py.net.full_node_client import FullNodeClient
-        from starknet_py.net.account.account import Account
-        from starknet_py.net.signer.stark_curve_signer import KeyPair
-        from starknet_py.contract import Contract
-        from starknet_py.net.models.chains import StarknetChainId
+        try:
+            from starknet_py.net.full_node_client import FullNodeClient
+            from starknet_py.net.account.account import Account
+            from starknet_py.net.signer.stark_curve_signer import KeyPair
+            from starknet_py.contract import Contract
+            from starknet_py.net.models.chains import StarknetChainId
+        except ImportError:
+            logger.error(
+                "starknet-py is not installed. "
+                "Install it on Python ≤3.12 with: pip install starknet-py==0.29.0"
+            )
+            return
 
         node_url = os.getenv("STARKNET_RPC_URL", "https://starknet-sepolia.public.blastapi.io")
         client = FullNodeClient(node_url=node_url)
