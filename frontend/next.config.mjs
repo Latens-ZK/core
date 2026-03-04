@@ -4,7 +4,8 @@ const nextConfig = {
     images: {
         unoptimized: true
     },
-    transpilePackages: ['framer-motion']
+    swcMinify: false,
+    transpilePackages: ['framer-motion', 'starknet', 'get-starknet']
 };
 
 export default nextConfig;

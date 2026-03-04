@@ -1,6 +1,13 @@
 """
 Proof generator — Python simulation of the Cairo circuit.
 Returns verified calldata for the Starknet BalanceVerifier contract.
+
+Post-refactor notes:
+  - The backend no longer receives the raw Bitcoin address or salt.
+  - `generate_proof` (legacy, used in tests) still accepts address_hash + salt.
+  - `generate_proof_no_salt` is the new production path: verifies only
+    Merkle inclusion and threshold; skips the commitment re-derivation since
+    the commitment was matched by the DB lookup in proof.py.
 """
 import logging
 from typing import List, Dict, Any, Optional
@@ -16,6 +23,7 @@ class ProofGenerator:
     - The backend verifies the circuit logic in Python
     - Returns verified calldata for the frontend to submit on-chain
     - True ZK proofs (STARK/SNARK) are the production extension
+      (see S2 sprint: Noir circuit + Barretenberg WASM + Garaga verifier)
     """
 
     def generate_proof(
@@ -29,7 +37,9 @@ class ProofGenerator:
         threshold: int,
     ) -> Dict[str, Any]:
         """
-        Verify circuit logic and return calldata.
+        Verify full circuit logic (commitment + Merkle + threshold) and return calldata.
+
+        Used in tests and legacy code paths where address_hash + salt are known.
 
         Args:
             address_hash: SHA256(address) % PRIME
@@ -56,25 +66,52 @@ class ProofGenerator:
         if not verified:
             raise ValueError("Circuit logic verification failed — proof would be invalid on-chain")
 
-        # Encode proof as structured calldata identifier
-        proof_str = (
-            f"LATENS_PROOF_v1:"
-            f"commitment={hex(commitment)}:"
-            f"root={hex(snapshot_root)}:"
-            f"depth={len(merkle_path)}:"
-            f"threshold={threshold}"
-        )
+        return self._build_proof_result(commitment, snapshot_root, merkle_path, threshold)
 
-        return {
-            'proof': proof_str,
-            'public_signals': [
-                hex(snapshot_root),
-                hex(commitment),
-                threshold,
-            ],
-            'verified': True,
-            'calldata_ready': True,
-        }
+    def generate_proof_no_salt(
+        self,
+        address_hash: int,
+        balance: int,
+        merkle_path: List[Dict],
+        snapshot_root: int,
+        commitment: int,
+        threshold: int,
+    ) -> Dict[str, Any]:
+        """
+        Privacy-safe proof verification: skips commitment re-derivation.
+
+        Used by the production proof route where the backend does NOT have
+        the user's salt (salt stays in the browser). The commitment was already
+        matched by DB lookup, so we only verify:
+          1. balance >= threshold (if threshold > 0)
+          2. Merkle inclusion: recompute root from (address_hash, balance) leaf + path
+
+        Args:
+            address_hash: Stored field element for the address.
+            balance: Satoshis from the snapshot record.
+            merkle_path: [{'value': int, 'direction': bool}, ...]
+            snapshot_root: Merkle root as int.
+            commitment: Poseidon(address_hash, salt) — used only for proof label.
+            threshold: Min balance in satoshis.
+
+        Returns:
+            Dict with 'proof', 'public_signals', 'verified', 'calldata_ready'
+        """
+        from ..crypto.poseidon import PoseidonHash
+        from ..crypto.merkle_tree import MerkleTree
+
+        # 1. Threshold check
+        if threshold > 0 and balance < threshold:
+            raise ValueError(
+                f"Balance {balance} satoshis is below threshold {threshold}"
+            )
+
+        # 2. Merkle inclusion (no salt needed — leaf is address_hash + balance)
+        leaf_hash = PoseidonHash.hash_address_balance(address_hash, balance)
+        if not MerkleTree.verify_proof_static(leaf_hash, merkle_path, snapshot_root):
+            raise ValueError("Merkle proof verification failed")
+
+        return self._build_proof_result(commitment, snapshot_root, merkle_path, threshold)
 
     def verify_circuit_logic(
         self,
@@ -111,6 +148,32 @@ class ProofGenerator:
             return False
 
         return True
+
+    def _build_proof_result(
+        self,
+        commitment: int,
+        snapshot_root: int,
+        merkle_path: List[Dict],
+        threshold: int,
+    ) -> Dict[str, Any]:
+        """Build the standardised proof result dict."""
+        proof_str = (
+            f"LATENS_PROOF_v1:"
+            f"commitment={hex(commitment)}:"
+            f"root={hex(snapshot_root)}:"
+            f"depth={len(merkle_path)}:"
+            f"threshold={threshold}"
+        )
+        return {
+            'proof': proof_str,
+            'public_signals': [
+                hex(snapshot_root),
+                hex(commitment),
+                threshold,
+            ],
+            'verified': True,
+            'calldata_ready': True,
+        }
 
     def generate_calldata(
         self,

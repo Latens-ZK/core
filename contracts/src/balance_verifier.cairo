@@ -5,6 +5,8 @@ use starknet::ContractAddress;
 pub trait IStateRootRegistryDispatch<TContractState> {
     fn get_root(self: @TContractState) -> felt252;
     fn get_root_at_height(self: @TContractState, height: u64) -> felt252;
+    fn get_latest_snapshot(self: @TContractState) -> (felt252, u64, u64);
+    fn is_root_valid(self: @TContractState, snapshot_height: u64) -> bool;
 }
 
 // ─── Structs ──────────────────────────────────────────────────────────────────
@@ -23,6 +25,7 @@ pub struct MerklePathElement {
 #[starknet::interface]
 pub trait IBalanceVerifier<TContractState> {
     /// Verify against the LATEST on-chain root.
+    /// Reverts if the latest root is expired (> MAX_ROOT_AGE blocks old).
     fn verify_proof(
         ref self: TContractState,
         address_hash: felt252,
@@ -34,6 +37,7 @@ pub trait IBalanceVerifier<TContractState> {
     ) -> bool;
 
     /// Verify against a specific historical root.
+    /// Reverts if the root at `block_height` is expired or missing.
     fn verify_proof_at_height(
         ref self: TContractState,
         address_hash: felt252,
@@ -76,6 +80,7 @@ pub mod BalanceVerifier {
         #[key]
         commitment: felt252,
         threshold: u64,
+        snapshot_height: u64,
         timestamp: u64,
     }
 
@@ -101,14 +106,19 @@ pub mod BalanceVerifier {
             let registry = IStateRootRegistryDispatchDispatcher {
                 contract_address: self.registry_address.read()
             };
-            let snapshot_root = registry.get_root();
+
+            let (snapshot_root, snapshot_height, _) = registry.get_latest_snapshot();
             assert(snapshot_root != 0, 'No root registered yet');
+
+            // ── Root expiry / TTL check ────────────────────────────────────────
+            // Rejects proofs against roots older than MAX_ROOT_AGE blocks.
+            assert(registry.is_root_valid(snapshot_height), 'Root expired');
 
             _verify(
                 ref self,
                 address_hash, salt, balance,
                 merkle_path, commitment, threshold,
-                snapshot_root,
+                snapshot_root, snapshot_height,
             )
         }
 
@@ -126,14 +136,18 @@ pub mod BalanceVerifier {
             let registry = IStateRootRegistryDispatchDispatcher {
                 contract_address: self.registry_address.read()
             };
+
+            // ── Root expiry / TTL check ────────────────────────────────────────
+            // is_root_valid checks: root exists AND age <= MAX_ROOT_AGE
+            assert(registry.is_root_valid(block_height), 'Root expired or missing');
+
             let snapshot_root = registry.get_root_at_height(block_height);
-            assert(snapshot_root != 0, 'No root at this height');
 
             _verify(
                 ref self,
                 address_hash, salt, balance,
                 merkle_path, commitment, threshold,
-                snapshot_root,
+                snapshot_root, block_height,
             )
         }
 
@@ -160,6 +174,7 @@ pub mod BalanceVerifier {
         commitment: felt252,
         threshold: u64,
         snapshot_root: felt252,
+        snapshot_height: u64,
     ) -> bool {
         // ── C-01: commitment = Poseidon(address_hash, salt) ──────────────────
         let (calc_commitment, _, _) = hades_permutation(address_hash, salt, 2);
@@ -180,6 +195,7 @@ pub mod BalanceVerifier {
         self.emit(ProofVerified {
             commitment,
             threshold,
+            snapshot_height,
             timestamp: get_block_timestamp(),
         });
 

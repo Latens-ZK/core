@@ -291,10 +291,14 @@ def seeded_client(client):
         proof = tree.get_proof(idx)
         leaf = PoseidonHash.hash_address_balance(addr_hash, bal)
         assert tree.verify_proof(leaf, proof, tree.root)
+        # Use a fixed test salt to produce a deterministic commitment
+        test_salt = 0xdeadbeef
+        commitment_int = PoseidonHash.hash_commitment(addr_hash, test_salt)
         db.add(AddressBalance(
             snapshot_id=snap.id, address=addr,
             address_hash=hex(addr_hash), balance=bal,
             merkle_path=json.dumps(proof),
+            commitment=hex(commitment_int),
         ))
     db.commit()
     db.close()
@@ -350,56 +354,81 @@ class TestSnapshotAPI:
 
 
 class TestProofAPI:
-    def test_invalid_address_rejected(self, seeded_client):
+    """
+    Proof API tests — updated for the privacy-first model.
+
+    The new /api/proof/generate endpoint accepts:
+      - commitment (felt252 hex): Poseidon(address_hash, salt) — computed client-side
+      - threshold (int): minimum balance in satoshis
+
+    The backend never receives a raw Bitcoin address.
+    Tests use the commitment seeded by seeded_client (test salt = 0xdeadbeef).
+    """
+
+    def _commitment_for(self, address: str) -> str:
+        """Compute the test commitment (matching seeded_client test_salt=0xdeadbeef)."""
+        from src.crypto.poseidon import PoseidonHash
+        from src.crypto.address_utils import AddressUtils
+        addr_hash = AddressUtils.get_address_hash(address)
+        commitment_int = PoseidonHash.hash_commitment(addr_hash, 0xdeadbeef)
+        return hex(commitment_int)
+
+    def test_invalid_commitment_rejected(self, seeded_client):
+        """Non-hex commitment should return 422."""
         r = seeded_client.post("/api/proof/generate", json={
-            "address": "not-valid",
-            "salt_hex": "abcd1234",
+            "commitment": "not-a-hex",
             "threshold": 0,
         })
-        assert r.status_code == 422  # Pydantic validation error
+        assert r.status_code == 422
 
-    def test_address_not_in_snapshot(self, seeded_client):
+    def test_commitment_not_in_snapshot(self, seeded_client):
+        """Unknown commitment returns 404 (privacy-safe: no address info leaked)."""
         r = seeded_client.post("/api/proof/generate", json={
-            "address": "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh",
-            "salt_hex": "deadbeef",
+            "commitment": "0xdeadbeefdeadbeef",
             "threshold": 0,
         })
         assert r.status_code == 404
 
     def test_successful_proof(self, seeded_client):
+        """Valid commitment returns proof calldata; no address in response."""
+        commitment = self._commitment_for("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa")
         r = seeded_client.post("/api/proof/generate", json={
-            "address": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
-            "salt_hex": "deadbeefdeadbeef",
+            "commitment": commitment,
             "threshold": 0,
         })
         assert r.status_code == 200
         data = r.json()
-        assert "address_hash" in data
-        assert "salt" in data
-        assert "balance" in data
-        assert "merkle_path" in data
-        assert "snapshot_root" in data
+        # Verify response fields
         assert "commitment" in data
+        assert "snapshot_root" in data
         assert "threshold" in data
         assert "block_height" in data
+        assert "merkle_path" in data
         assert "starknet_calldata" in data
+        assert "verified_locally" in data
+        # Privacy: no raw address in response
+        assert "address" not in data
+        assert "salt" not in data
+        # Data correctness
         assert isinstance(data["starknet_calldata"], list)
-        assert data["balance"] == 7_500_000_000
         assert data["block_height"] == 800_000
         assert data["verified_locally"] is True
+        assert data["commitment"] == commitment
 
     def test_threshold_too_high(self, seeded_client):
+        """Commitment exists but balance < threshold → 400."""
+        commitment = self._commitment_for("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa")
         r = seeded_client.post("/api/proof/generate", json={
-            "address": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
-            "salt_hex": "deadbeef",
+            "commitment": commitment,
             "threshold": 999_999_999_999,
         })
         assert r.status_code == 400
 
     def test_negative_threshold_rejected(self, seeded_client):
+        """Negative threshold → 422 Pydantic validation error."""
+        commitment = self._commitment_for("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa")
         r = seeded_client.post("/api/proof/generate", json={
-            "address": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
-            "salt_hex": "deadbeef",
+            "commitment": commitment,
             "threshold": -1,
         })
         assert r.status_code == 422

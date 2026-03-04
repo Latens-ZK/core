@@ -266,12 +266,16 @@ class SnapshotGenerator:
 
                 path_json = json.dumps(merkle_paths[addr])
 
+                # commitment is NOT stored at snapshot time — it's user-specific
+                # (requires salt from the browser).  The /api/snapshot/witness endpoint
+                # lets a client register their commitment after generating it locally.
                 items.append(AddressBalance(
                     snapshot_id=db_snapshot.id,
                     address=addr,
                     address_hash=hex(addr_hash),
                     balance=bal,
                     merkle_path=path_json,
+                    commitment=None,   # populated later via /api/snapshot/witness/register
                 ))
 
             db.bulk_save_objects(items)

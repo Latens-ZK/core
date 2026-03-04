@@ -60,8 +60,10 @@ export default function Home() {
                     </p>
                 </div>
 
-                <StateRadar />
-                <StatsBoard />
+                <ErrorBoundary>
+                    <StateRadar />
+                    <StatsBoard />
+                </ErrorBoundary>
 
                 <div className="relative mt-24 mb-32">
                     <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-silver-primary/5 rounded-full blur-[120px] -z-10" />

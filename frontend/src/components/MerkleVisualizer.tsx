@@ -111,7 +111,7 @@ const VisualNode = ({ label, value, type, isHighlighted }: {
 
                 {isHighlighted && (
                     <motion.div
-                        layoutId="pulse"
+                        layoutId={`pulse-${label}`}
                         className="absolute inset-0 border border-silver-primary rounded-xl"
                         animate={{ opacity: [0.1, 0.4, 0.1], scale: [1, 1.05, 1] }}
                         transition={{ repeat: Infinity, duration: 2 }}
