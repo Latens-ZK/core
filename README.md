@@ -6,6 +6,8 @@ Latens lets you prove Bitcoin solvency without ever revealing your address. A pr
 
 > *"I own ≥ 1 BTC"* — proven on-chain, address never seen.
 
+**In-depth docs:** [Architecture](docs/architecture.md) · [Crypto Spec](docs/crypto-spec.md) · [Contracts](docs/contracts.md) · [API](docs/api.md) · [Security](docs/security.md) · [Privacy](docs/privacy.md) · [Integration Guide](docs/integration.md)
+
 ---
 
 ## How It Works
@@ -13,13 +15,13 @@ Latens lets you prove Bitcoin solvency without ever revealing your address. A pr
 | Step | What happens |
 |------|-------------|
 | 1 | Latens snapshots the Bitcoin UTXO set at a fixed block height |
-| 2 | Balances are committed into a Poseidon Merkle tree |
-| 3 | The Merkle root is registered on Starknet via `StateRootRegistry` |
+| 2 | Balances are committed into a [Poseidon Merkle tree](docs/crypto-spec.md) |
+| 3 | The Merkle root is registered on Starknet via [`StateRootRegistry`](docs/contracts.md#staterootregistry) |
 | 4 | You generate a ZK proof binding your address + a random salt to a commitment |
-| 5 | `BalanceVerifier` checks the proof against the registry root — on-chain, trustless |
-| 6 | `DaoGate` optionally gates DAO membership behind your proof |
+| 5 | [`BalanceVerifier`](docs/contracts.md#balanceverifier) checks the proof against the registry root — on-chain, trustless |
+| 6 | [`DaoGate`](docs/contracts.md#daogate) optionally gates DAO membership behind your proof |
 
-Privacy model: Your Bitcoin address is **never posted on-chain** at any point. The chain only sees `commitment = Poseidon(address_hash || salt)`.
+Privacy model: Your Bitcoin address is **never posted on-chain** at any point. The chain only sees `commitment = Poseidon(address_hash || salt)`. See the [full privacy analysis](docs/privacy.md) and [end-to-end execution flow](docs/flow.md).
 
 ---
 
@@ -165,6 +167,8 @@ GET /api/stats
 
 ## Smart Contracts
 
+Full interface specs, storage layouts, and event schemas: [Contract Reference](docs/contracts.md)
+
 | Contract | Address (Sepolia) | Purpose |
 |----------|-------------------|---------|
 | `StateRootRegistry` | deploy to get | Stores Bitcoin snapshot Merkle roots |
@@ -218,6 +222,8 @@ make test
 
 ## Privacy Model
 
+See the [full privacy model](docs/privacy.md) for information-theoretic analysis of each layer, the calldata privacy caveat, and the production ZK path. See the [security model](docs/security.md) for threat analysis and known limitations.
+
 | Layer | Sees | Never sees |
 |-------|------|------------|
 | Client | address, salt, balance | — |
@@ -225,7 +231,7 @@ make test
 | On-chain (Starknet) | commitment, threshold, Merkle root | address, balance |
 | Chain explorer | commitment, tx hash | address, balance, identity |
 
-**Zero-knowledge guarantee:** The on-chain verifier confirms that *someone* knows an address inside the Merkle tree with the correct balance, without learning *which* address or *what* balance.
+**On-chain guarantee:** The verifier confirms that *someone* knows an address inside the Merkle tree with the correct balance, without learning *which* address or *what* balance. The `ProofVerified` event contains only `{commitment, threshold, snapshot_height, timestamp}`.
 
 ---
 
@@ -235,6 +241,8 @@ make test
 2. **Anonymous Lending** — Bitcoin credit score without KYC
 3. **Airdrop Eligibility** — Target whale wallets without a public list
 4. **Cross-Chain Reputation** — Port Bitcoin history to Starknet ecosystem
+
+See the [integration guide](docs/integration.md) for Cairo code snippets, threshold tiers, and composable use case patterns.
 
 ---
 

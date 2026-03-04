@@ -1,559 +1,254 @@
-dinesh alright — now we go full systems-level detail.
-This is the **execution-grade User Flow Spec** you give engineers.
+# Execution Flow
 
-Built on Starknet
-Bitcoin data source: Blockstream API or self-hosted node [https://blockstream.info/api/](https://blockstream.info/api/)
-
----
-
-# LATENS — FULL USER FLOW SPEC (DETAILED)
+> End-to-end trace of every state transition and network call in the Latens system.
+> Execution order is strict — each phase depends on the prior completing successfully.
 
 ---
 
-# 0. Actors
-
-### 1. End User
-
-Wants to privately verify BTC balance or ownership.
-
-### 2. Latens Backend
-
-Indexer + Merkle builder + Proof generator.
-
-### 3. Starknet Verifier Contract
-
-Final authority for proof validity.
-
----
-
-# 1. SYSTEM STATE BEFORE ANY USER INTERACTION
-
-This is critical.
-
-## 1.1 Snapshot Generation Flow (Precondition)
-
-### Trigger
-
-Cron job or manual admin trigger.
-
-### Steps
-
-1. Select Bitcoin block height `H`.
-2. Fetch all UTXOs at height `H`.
-3. Aggregate balances per address.
-4. Filter:
-
-   * Remove zero balances.
-5. Deterministic ordering:
-
-   * Lexicographically sorted by address hash.
-6. Construct Merkle tree:
-
-   * Leaf = Poseidon(address_hash || balance)
-7. Compute:
-
-   * `snapshot_root`
-   * `total_addresses`
-   * `timestamp`
-
-### Persisted Data (Backend DB)
+## Phase 0: Snapshot Bootstrap (Admin, One-Time per Block Height)
 
 ```
-{
-  block_height: H,
-  snapshot_root: felt252,
-  total_addresses: N,
-  address_balances: Map<address_hash, balance>,
-  merkle_paths: Map<address_hash, proof_path>
-}
+1.  Admin selects Bitcoin block height H (e.g., 800,000)
+
+2.  POST /api/snapshot/generate { "block_height": H }
+
+3.  Backend: BitcoinClient.fetch_utxos(H)
+    → calls Blockstream API: GET /api/block/{hash}/txs
+    → aggregates satoshi balances per address
+    → filters: remove zero-balance addresses
+
+4.  Backend: MerkleTree.build(balances)
+    → sort addresses ascending by address_hash = address_bytes_as_int % P
+    → compute leaf[i] = Poseidon(address_hash[i], balance[i])
+    → pad to next power of 2 with zero-leaves
+    → compute tree bottom-up: parent = Poseidon(left, right)
+    → store per-address merkle_path
+
+5.  Backend: persist to SQLite
+    → Snapshot: { block_height, merkle_root, total_addresses, timestamp }
+    → AddressBalance: { address_hash, balance, merkle_path_json }
+
+6.  Admin: call StateRootRegistry.update_root(merkle_root, H)
+    → Contract checks: caller == admin ✓
+    → Contract checks: H > current_block_height ✓
+    → Writes: current_root, block_height, root_history[H], updated_at
+    → Emits: RootUpdated { block_height: H, merkle_root, updated_at }
+
+CHECKPOINT: Root is live on-chain. Any proof referencing this root can be verified.
 ```
 
 ---
 
-## 1.2 Root Publication (On-Chain)
+## Phase 1: Client-Side Commitment Generation
 
-Admin calls:
-
-```
-update_root(snapshot_root, block_height)
-```
-
-Contract stores:
+**Runs entirely in the browser. No network calls.**
 
 ```
-current_root
-block_height
-updated_at
-```
+1.  User enters Bitcoin address
+    → Validate: Base58 checksum (P2PKH/P2SH) or Bech32 (native SegWit)
+    → Reject on format error — no request sent
 
-From this moment:
-All proofs must reference `current_root`.
+2.  User sets optional threshold (e.g., 1.0 BTC → 100,000,000 satoshis)
 
----
+3.  Browser generates salt:
+    salt = crypto.getRandomValues(new Uint8Array(32))
+    → 256 bits of entropy
+    → stored in React state only — never localStorage/sessionStorage
 
-# 2. USER FLOW A — PRIVATE BALANCE LOOKUP (FULL TRACE)
-
----
-
-## Phase 1 — Client-Side Commitment
-
-### Step 1 — User Inputs BTC Address
-
-Input format validated:
-
-* Base58 or Bech32
-* Length check
-* Checksum verification
-
-No network call yet.
-
----
-
-### Step 2 — Local Salt Generation
-
-Browser generates:
-
-```
-salt = random(32 bytes)
-```
-
-Stored in memory (NOT localStorage).
-
----
-
-### Step 3 — Address Normalization
-
-Convert address to canonical representation:
-
-* Convert to scriptPubKey
-* Hash to 32-byte value
-
-Reason:
-Different address encodings should map consistently.
-
----
-
-### Step 4 — Commitment Calculation
-
-```
-address_hash = Poseidon(address_bytes)
-commitment = Poseidon(address_hash || salt)
-```
-
-Now:
-
-* Raw address still private
-* Commitment safe to transmit
-
----
-
-## Phase 2 — Backend Query
-
-### Step 5 — Send Request
-
-Payload sent:
-
-```
-POST /generate-proof
-
-{
-  commitment,
-  optional_threshold
-}
-```
-
-Backend does NOT receive plaintext address in ideal model.
-(For MVP it may, but spec assumes privacy-first architecture.)
-
----
-
-## Phase 3 — Proof Preparation (Backend Internal)
-
-This is where most complexity lives.
-
----
-
-### Step 6 — Address Lookup
-
-Backend must reconstruct address_hash.
-
-Two models:
-
-### Model A (MVP Simpler)
-
-Frontend also sends plaintext address securely.
-Backend hashes and finds balance.
-
-### Model B (Stronger Privacy)
-
-Backend maintains mapping:
-commitment → precomputed address_hash
-(using private secure channel or TEE)
-
-For hackathon → Model A acceptable.
-
----
-
-### Step 7 — Fetch Balance
-
-Lookup:
-
-```
-balance = address_balances[address_hash]
-```
-
-If not found:
-Return error: “Address not in snapshot.”
-
----
-
-### Step 8 — Retrieve Merkle Path
-
-```
-merkle_path = merkle_paths[address_hash]
-```
-
-Includes:
-
-* sibling hashes
-* left/right positions
-
----
-
-## Phase 4 — ZK Proof Generation
-
----
-
-### Circuit Private Inputs
-
-```
-address_hash
-salt
-balance
-merkle_path[]
+4.  Commitment calculated client-side:
+    address_hash = address_utf8_bytes_as_int % P
+    commitment = Poseidon_pair(address_hash, salt)
+    → displayed to user (hex)
+    → this is what binds the proof to a specific address, without revealing it
 ```
 
 ---
 
-### Circuit Public Inputs
+## Phase 2: Proof Request (Client → Backend)
 
 ```
-snapshot_root
-threshold (optional)
-commitment
-```
+5.  POST /api/proof/generate {
+        "address":    "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+        "salt_hex":   "deadbeef...deadbeef",   ← 64 hex chars
+        "threshold":  100000000
+    }
 
----
+6.  Backend validation:
+    → Check address format (bitcoin-address library)
+    → If malformed → HTTP 422
 
-### Circuit Constraints (Exact)
+7.  Backend lookup:
+    address_hash = address_utf8_bytes_as_int % P
+    record = DB.query(AddressBalance).filter(address_hash == computed)
+    → If not found → HTTP 404 { "error": "address_not_indexed" }
 
-1. `Poseidon(address_hash || salt) == commitment`
-2. `ComputeMerkleRoot(address_hash, balance, merkle_path) == snapshot_root`
-3. If threshold provided:
+8.  Backend: threshold pre-check
+    → If record.balance < threshold → HTTP 400 { "error": "threshold_not_met" }
 
-   ```
-   balance >= threshold
-   ```
+9.  Backend: commitment derivation
+    client_commitment = Poseidon_pair(address_hash, salt_from_request)
 
-No balance output.
+10. Backend: circuit verification (off-chain simulation)
+    ProofGenerator.generate_proof_no_salt(
+        address_hash, balance, merkle_path, snapshot_root,
+        commitment=client_commitment, threshold
+    )
+    → Verifies: balance >= threshold
+    → Verifies: recompute_root(Poseidon(address_hash, balance), path) == snapshot_root
+    → If either fails → returns error (internal consistency check)
 
----
+11. Backend: calldata encoding
+    ProofGenerator.generate_calldata(address_hash, salt, balance, merkle_path,
+                                     commitment, threshold)
+    → [address_hash, salt, balance, len(path), path[0].value, path[0].dir, ..., commitment, threshold]
 
-### Output
-
-```
-proof_blob
-public_signals
-```
-
-Returned to frontend.
-
----
-
-## Phase 5 — On-Chain Verification
-
----
-
-### Step 9 — User Connects Wallet
-
-Wallet:
-
-* Argent
-* Braavos
-* Any Starknet wallet
-
-Gas paid by user.
-
----
-
-### Step 10 — Submit Proof
-
-Call:
-
-```
-verify_balance_proof(
-    proof,
-    snapshot_root,
-    threshold,
-    commitment
-)
+12. Response:
+    {
+      "proof": "LATENS_PROOF_v1:...",
+      "public_signals": { snapshot_root, commitment, threshold },
+      "block_height": H,
+      "starknet_calldata": [...],
+      "verified_locally": true
+    }
 ```
 
 ---
 
-## Phase 6 — Contract Logic
-
-Verifier executes:
-
-1. Validate proof using embedded verifier.
-2. Check:
-
-   ```
-   snapshot_root == stored_root
-   ```
-3. If valid:
-
-   * Emit event
-   * Return true
-
-Else:
-
-* Revert or return false
-
----
-
-## Phase 7 — Final UI State
-
-If success:
+## Phase 3: On-Chain Verification (Client → Starknet)
 
 ```
-✔ Valid Proof
-Block Height: H
-Threshold: ≥ 1 BTC
-```
+13. User connects Starknet wallet (Argent X / Braavos)
+    → get-starknet wallet provider
+    → network must be Starknet Sepolia
 
-No address revealed.
-No balance revealed.
+14. Frontend constructs transaction:
+    account.execute({
+        contractAddress: VERIFIER_ADDRESS,
+        entrypoint: 'verify_proof',
+        calldata: starknet_calldata   ← direct from step 12
+    })
 
----
+15. Wallet prompts user to sign → user approves
 
-# 3. USER FLOW B — “I Own ≥ X BTC” (THRESHOLD MODE)
+16. Transaction submitted to Starknet sequencer
 
-This is the stronger use case.
+17. BalanceVerifier.verify_proof() executes:
 
-Only difference:
+    a. Calls StateRootRegistry.get_latest_snapshot()
+       → Returns (snapshot_root, snapshot_height, updated_at)
 
-* Threshold must be public input.
-* Circuit includes inequality constraint.
-* Balance itself never leaves private witness.
+    b. Asserts snapshot_root != 0
+       → If zero: revert 'No root registered yet'
 
----
+    c. Calls StateRootRegistry.is_root_valid(snapshot_height)
+       → age = latest_height - snapshot_height
+       → Asserts age <= 1008
+       → If expired: revert 'Root expired'
 
-## Important Edge Case
+    d. C-01: hades_permutation(address_hash, salt, 2)[0] == commitment
+       → If mismatch: revert 'Invalid commitment'
 
-User has 0.8 BTC but tries ≥1 BTC.
+    e. C-03: if threshold > 0: balance >= threshold
+       → If fails: revert 'Balance below threshold'
 
-Circuit fails at constraint stage.
-Proof generation fails.
-User sees:
+    f. C-02: leaf = hades_permutation(address_hash, balance, 2)[0]
+             computed_root = compute_merkle_root(leaf, merkle_path)
+             assert computed_root == snapshot_root
+       → If mismatch: revert 'Invalid Merkle proof'
 
-```
-Threshold not satisfied.
-```
+    g. Emits: ProofVerified { commitment, threshold, snapshot_height, timestamp }
 
-No chain interaction.
+    h. Returns: true
 
----
+18. Transaction confirmed → frontend receives tx_hash
 
-# 4. FAILURE STATES (DETAILED)
-
----
-
-## A. Snapshot Mismatch
-
-User generates proof for root R1.
-Contract root = R2.
-
-Verification fails.
-
-UI response:
-“Snapshot outdated. Regenerate proof.”
-
----
-
-## B. Malformed Proof
-
-Verifier rejects.
-
-Gas spent.
-Transaction reverts.
-
----
-
-## C. Address Not Indexed
-
-If below balance filter threshold:
-
-* Address excluded from snapshot
-* Proof impossible
-
-UI message:
-“Address not included in current privacy set.”
-
----
-
-# 5. DATA PRIVACY SURFACE ANALYSIS
-
-Let’s audit leakage.
-
----
-
-## At Client
-
-Knows:
-
-* address
-* salt
-* balance (only if backend returns it — ideally don’t)
-
----
-
-## Backend
-
-Knows (MVP):
-
-* address
-* balance
-
-Future hardened model:
-
-* Backend only sees commitment
-
----
-
-## On-Chain
-
-Sees:
-
-* proof
-* snapshot_root
-* threshold
-* commitment
-
-Cannot infer:
-
-* address
-* balance
-* UTXOs
-
----
-
-# 6. STATE TRANSITION DIAGRAM (SIMPLIFIED)
-
-```
-User Input
-   ↓
-Local Hashing
-   ↓
-Commitment Sent
-   ↓
-Balance Lookup
-   ↓
-Merkle Path Retrieved
-   ↓
-ZK Proof Generated
-   ↓
-Proof Submitted On-Chain
-   ↓
-Verification Event
+19. Frontend displays:
+    ✔ Valid | Block 800,000 | ≥ 1 BTC | Tx: 0x...
+    [View on Starkscan ↗]
 ```
 
 ---
 
-# 7. DAO GATING FLOW (DETAILED)
-
----
-
-## Step 1 — DAO Contract Requires
+## Phase 4: DAO Membership (Optional, via DaoGate)
 
 ```
-require(verify_threshold_proof(proof))
+20. If caller wants DAO membership instead of one-time verification:
+    Replace step 14 with DaoGate.join_dao() call
+
+21. DaoGate.join_dao() executes:
+
+    a. Assert !members[caller]
+       → If already member: revert 'Already a DAO member'
+
+    b. nullifier_hash = hades_permutation(salt, external_nullifier, 2)[0]
+       (external_nullifier = DaoGate contract address as felt252)
+
+    c. Assert !used_nullifiers[nullifier_hash]
+       → If reused: revert 'Nullifier already used'
+
+    d. verifier.verify_proof(..., threshold=min_threshold)
+       → All constraints from steps 17a-h apply
+       → If any fail: revert (cascades from BalanceVerifier)
+
+    e. used_nullifiers[nullifier_hash] = true
+    f. members[caller] = true
+    g. member_count += 1
+    h. Emits: MemberAdded { member, commitment, nullifier_hash, timestamp }
+
+22. Membership is permanent — is_member(caller) returns true for all future calls
 ```
 
 ---
 
-## Step 2 — User Generates ≥ X BTC Proof
+## Failure Paths
 
-Same as earlier flow.
+| Where | Condition | Revert / Response |
+|---|---|---|
+| Client (format) | Bad Bitcoin address | No request sent; UI error |
+| Backend | Address not in snapshot | HTTP 404 `address_not_indexed` |
+| Backend | Balance < threshold | HTTP 400 `threshold_not_met` |
+| Backend | No snapshot in DB | HTTP 503 `snapshot_unavailable` |
+| Contract | snapshot_root == 0 | Revert `'No root registered yet'` |
+| Contract | Root too old | Revert `'Root expired'` |
+| Contract | Commitment mismatch | Revert `'Invalid commitment'` |
+| Contract | Threshold not met | Revert `'Balance below threshold'` |
+| Contract | Bad Merkle path | Revert `'Invalid Merkle proof'` |
+| DaoGate | Already member | Revert `'Already a DAO member'` |
+| DaoGate | Nullifier reused | Revert `'Nullifier already used'` |
 
 ---
 
-## Step 3 — DAO Mints Role
-
-If true:
+## State Diagram
 
 ```
-mintMembershipNFT(msg.sender)
+[No snapshot]
+     │
+     │ POST /api/snapshot/generate
+     ▼
+[Snapshot in DB]
+     │
+     │ Admin: StateRootRegistry.update_root()
+     ▼
+[Root registered on-chain]  ←──── loops on new snapshot updates
+     │
+     │ User: POST /api/proof/generate
+     ▼
+[Calldata available]
+     │
+     │ Wallet: BalanceVerifier.verify_proof()
+     ▼
+[ProofVerified event on-chain]
+     │                              ┌────────────────────────────┐
+     │ (optional)                   │ DaoGate.join_dao()         │
+     └──────────────────────────────→ MemberAdded event on-chain │
+                                    └────────────────────────────┘
 ```
 
-No BTC identity link.
-
-This enables:
-
-* Anonymous capital gating
-* Cross-chain reputation
-* BTC-backed governance
-
 ---
 
-# 8. PERFORMANCE EXPECTATIONS
+## Related Documentation
 
-* Proof generation: < 10 sec
-* Merkle tree size: optimized via filtering
-* Verification cost: low due to Cairo-native proof system
-
-Reference:
-Starknet uses STARK proofs, optimized for verification efficiency
-[https://docs.starknet.io/](https://docs.starknet.io/)
-
----
-
-# 9. SECURITY REVIEW CHECKLIST
-
-Before demo:
-
-* Deterministic Merkle ordering
-* No duplicate leaves
-* Salt length ≥ 32 bytes
-* Threshold logic correctly enforced
-* Root immutability enforced
-
----
-
-# 10. Critical Design Opinion
-
-dinesh real talk:
-
-Balance lookup is cool.
-Threshold proof is impressive.
-But the killer feature is:
-
-> Prove non-interaction with blacklisted sets.
-
-That’s institution-grade.
-
-That would make this more interesting than explorers like
-Mempool.space
-[https://mempool.space/docs](https://mempool.space/docs)
-
-Because they observe — you prove.
-
----
-
-If you want next level:
-
-* I can design the exact Merkle leaf structure
-* Or write the full Cairo contract interface spec
-* Or simulate attack vectors like a red team
-
-This is getting serious now.
+- [Architecture](./architecture.md) — System layer overview
+- [API Reference](./api.md) — Endpoint details for steps 5–12
+- [Contract Reference](./contracts.md) — Revert conditions for steps 17–22
+- [Cryptographic Specification](./crypto-spec.md) — Hash functions used in every Poseidon call
